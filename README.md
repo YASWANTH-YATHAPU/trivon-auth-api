@@ -1,100 +1,129 @@
 # TRIVON Authentication and Authorization API
 
-## Purpose and scope
+Express and MySQL service for authentication, access-token sessions, and reusable authorization checks for a multi-seller platform. It includes seller onboarding and seller-user lifecycle endpoints; it does not implement e-commerce features or platform staff administration.
 
-This service is the planned identity and access-control API for TRIVON's multi-seller platform. The current implementation is a small Express foundation with a health endpoint. MySQL configuration is prepared for later use; authentication, authorization, database queries, and tenant enforcement are not implemented yet.
+## Implemented routes
 
-## Technology stack
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Service health check |
+| `POST` | `/auth/sellers/register` | Public seller onboarding; creates an active account with `PENDING` verification |
+| `POST` | `/auth/login` | Authenticate one typed account and issue tokens |
+| `POST` | `/auth/refresh` | Rotate a refresh token and issue a new access token |
+| `POST` | `/auth/logout` | Revoke the refresh-token session and its access tokens |
+| `GET` | `/auth/me` | Return the currently authenticated account |
+| `POST` | `/auth/seller-users` | Create a user for the authenticated, verified seller |
+| `GET` | `/auth/seller-users` | List users belonging to the authenticated, verified seller |
+| `PATCH` | `/auth/seller-users/:userId/active` | Activate/deactivate one user within that seller |
 
-- Node.js with ES modules
-- Express.js
-- MySQL through `mysql2`
-- `dotenv` for local environment configuration
-- `helmet` for HTTP security headers
-- Node.js built-in test runner
+Account types are `SUPER_ADMIN`, `ADMIN`, `ACCOUNTANT`, `SELLER`, `CUSTOMER_CARE`, and `SELLER_USER`. Login requires `userType` and email. `sellerId` is required for `SELLER_USER` and rejected for other account types. Email is trimmed and lowercased. Seller-user lookup is always scoped to both seller ID and email.
 
-## Prerequisites
+Seller self-registration is available from the PDF's onboarding rule. It accepts name, email, password, business name, and optional mobile/GST identifiers. It creates a seller and one `PENDING` verification record in one transaction. It does not accept document URLs, grant roles, or return tokens; the seller logs in separately. Duplicate seller email/GST conflicts return a generic `409`.
 
-- Node.js 20 or newer (the built-in test runner and `fetch` are used)
-- npm
-- MySQL is only needed when database-backed features are implemented. Tests and the current server do not require a MySQL server.
+```json
+POST /auth/sellers/register
+{
+  "name": "Example Seller",
+  "email": "seller@example.com",
+  "password": "provided-by-the-seller",
+  "businessName": "Example Store"
+}
+```
 
-## Install
+The successful response has `{ "user": { "id": "...", "userType": "SELLER", "sellerId": "...", "verificationStatus": "PENDING" } }`.
 
-From the project directory, install the dependencies listed in the lockfile:
+Seller-user creation and status management require a `SELLER` account with `APPROVED` verification. The seller ID comes from the authenticated account and is included in every account query. The request cannot select another seller. Newly created seller users receive no roles; role assignment remains disabled until its authority and scope are approved.
+
+Example login request:
+
+```json
+{
+  "userType": "SELLER_USER",
+  "sellerId": "17",
+  "email": "buyer@example.com",
+  "password": "provided-by-the-user"
+}
+```
+
+Successful login returns `accessToken`, `tokenType`, `expiresIn`, `refreshToken`, and a public `user` object. Use the access token as `Authorization: Bearer <accessToken>`.
+
+Refresh and logout requests use the current refresh token:
+
+```json
+{ "refreshToken": "<opaque-refresh-token>" }
+```
+
+Refresh rotates the submitted token. Reuse of a rotated token revokes the entire session. Logout revokes all refresh and access-token rows for that session. Access requests check the JWT and the matching token row, so logout is enforced immediately for requests using this service's authentication middleware. No claim is made about revocation in other services that validate JWTs without checking `jwt_tokens`.
+
+## Local setup
+
+Requirements: Node.js 20 or newer, npm, and MySQL 8.0.16 or newer. Install from the committed lockfile:
 
 ```sh
 npm ci
 ```
 
-## Configure environment
+Create a private `.env` from `.env.example`. Set real local database values and a randomly generated `JWT_ACCESS_SECRET` of at least 32 bytes. Do not commit `.env` or use the example values as production credentials.
 
-Copy `.env.example` to `.env` and replace the safe example values with local settings when needed. Keep `.env` private and never commit it. The current server reads `NODE_ENV`/`PORT` through dotenv; `src/config/database.js` reads database settings only when its pool factory is called.
+| Variable | Purpose |
+| --- | --- |
+| `NODE_ENV` | Runtime environment |
+| `PORT` | HTTP port, defaults to `3000` |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | MySQL connection settings |
+| `JWT_ACCESS_SECRET` | HS256 signing secret, required and at least 32 bytes |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | JWT issuer and audience; documented defaults are in `.env.example` |
+| `JWT_ACCESS_TTL_SECONDS` | Access lifetime; defaults to 900 seconds and is limited to 60-3600 |
+| `REFRESH_TOKEN_TTL_SECONDS` | Refresh lifetime; defaults to 604800 seconds and is limited to 3600-2592000 |
+| `BCRYPT_WORK_FACTOR` | Password hashing cost; defaults to 12 and is limited to 10-15 |
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `NODE_ENV` | Runtime environment | `development` |
-| `PORT` | HTTP listen port | `3000` |
-| `DB_HOST` | MySQL host | `localhost` |
-| `DB_PORT` | MySQL port | `3306` |
-| `DB_USER` | MySQL user | `your_mysql_user` |
-| `DB_PASSWORD` | MySQL password | `your_mysql_password` |
-| `DB_NAME` | MySQL database name | `trivon_auth` |
+Start the API with `npm start`. Database connections are opened lazily by routes and use a shared `mysql2/promise` connection pool.
 
-The app does not open or verify a database connection at startup. The database module exports a pool factory for future route/service code to call after configuration is available.
+## Database commands
 
-## Run
+`npm run db:check` executes `SELECT 1` and closes its pool. `npm run db:migrate:status` displays pending/applied migrations and checks recorded checksums. Neither command creates application tables.
 
-```sh
-npm start
+The migration runner does not drop or replace tables. Before running it, verify that `.env` points to the intended disposable development database and inspect status. It stops when it finds untracked application tables, a migration checksum mismatch, or database migrations whose source files are missing from this checkout. MySQL DDL is not transactional; if a connection fails partway through a migration, inspect the database before retrying.
+
+After checking `DB_NAME` and the migration status, explicitly enable migration execution:
+
+```powershell
+$env:ALLOW_SCHEMA_MIGRATIONS = 'true'
+npm.cmd run db:migrate
+Remove-Item Env:\ALLOW_SCHEMA_MIGRATIONS
 ```
 
-For automatic restarts during development:
+The current schema is provisional. Review [the schema decisions](docs/architecture-decisions.md) and obtain the listed team decisions before applying it to shared or production data.
 
-```sh
-npm run dev
-```
+## Initial Super Admin
 
-The server listens on port `3000` by default. Set `PORT` to use another port.
+After applying the reviewed schema to a development database, run `npm run auth:bootstrap-super-admin` from an interactive terminal and confirm the displayed database name. The command verifies the connected database matches `DB_NAME`, obtains a MySQL advisory lock, refuses to proceed if a Super Admin already exists, prompts for name/email, and reads the password without echoing it. It never accepts a password on the command line or prints the password/hash. The bootstrap creates only the initial account; there is no public Super Admin registration route.
 
-## Test
+Creating a Super Admin does not automatically assign permissions. No roles or permissions are seeded, and platform staff management and an approved role-assignment workflow remain unimplemented. Protected operations using `requirePermission()` deny access until an approved role assignment and permission exist.
 
-```sh
-npm test
-```
+## Authentication and authorization behavior
 
-Tests use ephemeral loopback ports and the built-in `node:test` runner. They do not need MySQL.
+- Passwords use `bcryptjs` with a work factor of 12 by default. Login rejects passwords above bcrypt's 72-byte input limit.
+- Access tokens are HS256 JWTs, default lifetime 15 minutes, with issuer, audience, subject, account type, seller context, session ID, JWT ID, issued-at, and expiry claims. Signature, expiry, issuer, audience, algorithm, and required claims are validated.
+- Refresh tokens contain 32 random bytes encoded as base64url. Only SHA-256 hashes are stored in MySQL. Tokens rotate on refresh; reuse revokes the session.
+- Access JWT hashes, expiry, and revocation are stored in `jwt_tokens`; access middleware checks that row on each request. Refresh hashes, expiry, and rotation/revocation state are stored in `refresh_tokens`.
+- Inactive accounts cannot log in or use access tokens. Seller accounts can authenticate for onboarding. Seller-user management applies `requireSellerOwner()`, `requireSellerTenant()`, and `requireSellerVerified()`; the latter allows only `APPROVED` sellers. No commerce-resource or verification-review routes are exposed.
+- `requirePermission(name)` resolves the effective permission from MySQL on the server. Missing assignments deny with `403`; the client cannot supply identity, role, permission, or trusted seller context.
+- Login is limited to 10 attempts per IP per 15 minutes using an in-memory limiter. For multi-instance deployments, configure an approved shared rate-limit store before relying on a cluster-wide threshold.
+- Seller self-registration is limited to 5 attempts per IP per 15 minutes with the same in-memory limitation.
+- Helmet is enabled. JSON bodies are limited to 10 KB. There is no permissive CORS configuration.
 
-## Available endpoint
+Refresh tokens are currently returned in JSON and accepted in JSON request bodies. A browser-specific `HttpOnly` cookie and CSRF strategy has not been approved or implemented; client storage policy remains a deployment decision.
 
-| Method | Path | Response |
-| --- | --- | --- |
-| `GET` | `/health` | `200` with `{"status":"ok"}` |
+Expired and revoked token rows are retained so refresh-token reuse can be detected; automated retention cleanup is not implemented.
 
-Unknown paths return `404` with `{ "error": { "code": "NOT_FOUND", "message": "Route not found" } }`.
+## Errors
 
-## Current implementation status
+Errors use `{ "error": { "code": "...", "message": "..." } }`. Invalid fields return `400`, unauthenticated requests return `401`, denied permissions/tenant access return `403`, oversized bodies return `413`, unknown paths return `404`, and unavailable database/auth services return a generic `503`. SQL text, stack traces, password values, and token values are not returned.
 
-- Express app, server entry point, Helmet configuration, and JSON parsing are in place.
-- `GET /health` and the unknown-route response are implemented and covered by tests.
-- A MySQL pool factory is prepared, but it has not been verified against a running MySQL server and is not used by the app yet.
-- The proposed schema is documented in `docs/`; there are no migrations or tables in this repository.
-- Login, password verification, JWT issuance, refresh sessions, logout, RBAC, account management, and seller tenant isolation are not implemented.
+## Tests
 
-## Planned development phases
+Run the built-in Node.js test suite with `npm test`. It uses mocked database interactions and ephemeral HTTP servers; it does not require MySQL. Live database integration has not been run in this environment. Configure an isolated test database before adding integration tests; never point tests at production data.
 
-1. Confirm the open schema decisions recorded in `docs/schema-review.md`.
-2. Finalize and implement the database schema through reviewed migrations.
-3. Verify MySQL connectivity and add a repository/service data-access layer.
-4. Implement account lifecycle and authentication flows.
-5. Implement access-token and refresh-session handling.
-6. Implement role/permission authorization and enforce seller-level tenant isolation.
-7. Expand integration tests and API documentation as endpoints are added.
+## Current limits and team decisions
 
-## Security practices
-
-- Store password hashes, never plaintext passwords.
-- Keep credentials in local environment configuration and out of source control.
-- Use parameterized SQL for all database queries.
-- Validate inputs and return consistent errors.
-- Derive seller scope from authenticated identity and verify it against every tenant-owned resource.
+The migration and session model encode documented provisional decisions. Global account role assignment, seller role scope, seller verification reviewer permissions/history, seller creator references, and verification-state policy still need product/team confirmation. Seller self-registration and verified seller-user create/list/status management are implemented. Creating/managing platform staff, verification review, role/permission administration, and address CRUD endpoints are not implemented. See [architecture decisions](docs/architecture-decisions.md) and [schema review](docs/schema-review.md) before treating this service as ready for shared or production use.

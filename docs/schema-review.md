@@ -1,51 +1,34 @@
-# Database schema review
+# Proposed database schema review
 
-## Overview
+This review is based on the October 2026 schema PDF. The proposal contains 14 tables and allows identifiers to use UUID or BIGINT consistently. It describes a current verification record per seller, seller-user roles, central roles and permissions, and separate refresh-token and JWT tracking tables.
 
-The October 2026 schema PDF proposes 14 tables for platform and seller identities, seller onboarding and verification, seller-user addresses, roles and permissions, and token/session tracking. The document says IDs should use UUID or BIGINT consistently. This review records the proposal and risks; it does not change the approved design or create tables.
+## Proposed tables
 
-## Main table groups
+| Area | Tables |
+| --- | --- |
+| Accounts | `super_admins`, `admins`, `accountants`, `sellers`, `customer_care`, `seller_users` |
+| Seller/user data | `seller_verifications`, `user_addresses` |
+| Authorization | `seller_user_roles`, `roles`, `permissions`, `role_permissions` |
+| Tokens | `refresh_tokens`, `jwt_tokens` |
 
-- **Platform and tenant accounts:** `super_admins`, `admins`, `accountants`, `sellers`, and `customer_care` hold distinct account categories. `seller_users` holds users scoped to one seller.
-- **Seller onboarding:** `seller_verifications` stores MSME/GST document references and the verification outcome. `sellers` also carries a verification status.
-- **Seller-user data:** `user_addresses` stores multiple addresses for a seller user.
-- **Authorization:** `roles` and `permissions` define access; `role_permissions` links them; `seller_user_roles` assigns roles to seller users.
-- **Sessions and tokens:** `refresh_tokens` stores hashed refresh tokens and revocation data. `jwt_tokens` appears to track access and refresh lifecycle metadata.
+The proposal says Super Admin has no public registration; Admin can manage only assigned privileges; a Seller owns tenant-scoped Seller Users; and all protected seller resources must enforce the authenticated seller context. Seller-user email uniqueness is `UNIQUE(seller_id, email)`. The current seller verification row is unique by seller.
 
-## Keys and relationships described
+## Relationships and gaps
 
 - `admins.created_by` and `accountants.created_by` reference `super_admins.id`.
-- `sellers.created_by` plus `created_by_type` point to either a super admin or admin, depending on type.
-- `seller_users.seller_id` references `sellers.id`; `(seller_id, email)` must be unique.
-- `user_addresses.user_id` references `seller_users.id`.
-- `seller_verifications.seller_id` references `sellers.id`; the PDF calls for a unique seller ID for the current verification record.
-- `seller_user_roles.seller_user_id` references `seller_users.id` and `role_id` references `roles.id`; the pair is unique.
-- `role_permissions.role_id` references `roles.id` and `permission_id` references `permissions.id`; the pair is unique.
-- Token rows carry `user_id`, `user_type`, and optional `seller_id`, but the account-table references are polymorphic rather than ordinary foreign keys.
+- `seller_users.seller_id` references `sellers.id`; `user_addresses.user_id` references `seller_users.id`.
+- `seller_verifications.seller_id` references `sellers.id` and is unique for the current record.
+- `seller_user_roles` links seller users to roles; `role_permissions` links roles to permissions.
+- `sellers.created_by` plus `created_by_type` and `seller_verifications.reviewed_by` are polymorphic references in the proposal. Ordinary foreign keys cannot validate them against multiple account tables.
+- Token `user_id` plus `user_type` is polymorphic for the same reason. The account type must be a strict allowlist.
+- Global account categories have no role-assignment table in the PDF. The PDF calls six account categories “roles” in its summary but only provides a seller-user role mapping table.
+- `sellers.verification_status` duplicates the current `seller_verifications.verification_status` value. The source of truth and synchronization policy need agreement.
+- The token tables overlap in lifecycle metadata. `jwt_tokens` includes refresh expiry and access-token revocation; `refresh_tokens` includes token expiry and revocation. Session identity, rotation, and replay behavior need clear ownership.
+- One current verification row does not preserve review history or prior rejection/document metadata after resubmission.
+- `roles` in the PDF has no scope/tenant owner field, so seller-defined role isolation is not expressed.
 
-## Seller-level isolation requirements
+## Migration readiness
 
-Treat `seller_id` as trusted server-side context derived from the authenticated identity. For every seller-owned read or write, the service must scope the operation by that tenant and verify the resource belongs to it. A client-provided seller ID must not allow switching tenants. Role assignment and address operations must likewise be checked against the seller-user's owning seller. These are requirements from the schema document, not implemented behavior in the current app.
+The current initial migration uses `BIGINT UNSIGNED AUTO_INCREMENT`, adds role scope and `global_account_roles`, records reviewer type, and adds session IDs to both token tables. These are provisional additions, not approved changes to the PDF. The migration retains the 14 proposed tables and additionally creates `global_account_roles`; the schema decision record explains each addition. No live database has been inspected or modified.
 
-## Decisions to confirm before migrations
-
-1. **`refresh_tokens` and `jwt_tokens`:** Decide whether both tables are needed. The refresh table supports revocable sessions; the JWT table duplicates some expiry/revocation data and has `refresh_token_expires_at`, so ownership and lifecycle responsibilities are unclear. A stateless access JWT may not need a row per token unless immediate revocation or audit is required.
-2. **`user_id` plus `user_type`:** Define the accepted `user_type` enum/values, how IDs map to six separate account tables, and how referential integrity, deletion, and account type changes are handled. Prefer a shared identity/sessions model only if the project lead approves a design change; do not assume it here.
-3. **`sellers.created_by`:** Confirm allowed creator types, whether `ADMIN` is always allowed to create sellers, and how to enforce that the creator ID exists in the table named by `created_by_type`. A conventional FK cannot enforce this polymorphic reference.
-4. **`seller_verifications.reviewed_by`:** Confirm which account categories may review, how reviewer type is represented, and whether the reviewer must be a global administrator. The current column alone cannot identify a row among multiple account tables safely.
-5. **Verification history:** The PDF says one current verification row per seller while also recording timestamps and rejection details. Decide whether resubmissions overwrite that row or create an auditable history, and how old documents and decisions are retained.
-6. **Global and tenant roles:** `seller_user_roles` only assigns roles to seller users. Confirm how admins, accountants, customer-care staff, super admins, and sellers receive roles/permissions, and whether `roles` are global, seller-defined, or both. Define uniqueness and role scope accordingly.
-7. **Identifier type:** Select UUID or BIGINT before schema creation and apply it consistently to PKs, FKs, and polymorphic IDs. Also confirm UUID storage format if selected.
-
-## Potential inconsistencies and implementation risks
-
-- The PDF's overview table inventory numbers and categories do not match the detailed table numbering; use the detailed 14-table definitions as the current inventory pending confirmation.
-- `sellers.verification_status` and `seller_verifications.verification_status` duplicate state. Define the source of truth and update consistency rules.
-- The token tables overlap, and `jwt_tokens.refresh_token_expires_at` sits alongside `refresh_tokens`; this can create conflicting expiry and revocation state.
-- `jwt_tokens.token_type` is described as a bearer type while the table is also framed as JWT/session tracking. Confirm whether this column means token class, signing format, or something else.
-- The schema says “6 Roles” in a summary, but the six account categories are not all linked to the central `roles` table. Clarify whether those are account types or authorization roles.
-- The PDF lists a unique `seller_verifications.seller_id` for the current record; if history is required, that uniqueness must instead be modeled around current status/versioning.
-- The seller email and GST uniqueness notes are conditional business rules. Confirm normalization/case behavior and whether uniqueness is global before applying indexes.
-- `seller_users.created_by` is described as a seller FK, but the exact intended reference (the owning seller versus the seller account that created the user) should be confirmed.
-
-No migrations or database tables were created during this review.
+The SQL includes no `DROP` or overwrite operations. The runner tracks ordered migration names/checksums and stops on existing untracked target tables, checksum mismatches, unknown applied migrations, or per-migration table conflicts. MySQL DDL can partially apply if a connection fails; inspect the database manually before retrying after an interrupted migration.

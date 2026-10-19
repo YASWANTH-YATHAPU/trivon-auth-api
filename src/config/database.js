@@ -25,6 +25,9 @@ function readDatabaseConfig(env) {
     user: String(env.DB_USER).trim(),
     password: String(env.DB_PASSWORD),
     database: String(env.DB_NAME).trim(),
+    timezone: 'Z',
+    supportBigNumbers: true,
+    bigNumberStrings: true,
   };
 }
 
@@ -41,4 +44,13 @@ export function createDatabasePool(env = process.env) {
     queueLimit: 0,
     connectTimeout: 10_000,
   });
+}
+
+/** Return a shared, lazily-created pool provider for request handlers. */
+export function createLazyDatabasePoolProvider(env = process.env) {
+  let pool;
+  return () => {
+    pool ??= createDatabasePool(env);
+    return pool;
+  };
 }

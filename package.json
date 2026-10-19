@@ -9,7 +9,11 @@
   "scripts": {
     "test": "node --test",
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "db:check": "node src/scripts/check-database.js",
+    "db:migrate": "node src/scripts/migrate.js up",
+    "db:migrate:status": "node src/scripts/migrate.js status",
+    "auth:bootstrap-super-admin": "node src/scripts/bootstrap-super-admin.js"
   },
   "keywords": [],
   "author": "",
@@ -17,9 +21,13 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
-    "mysql2": "^3.24.6"
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.24.6",
+    "zod": "^4.6.7"
   }
 }

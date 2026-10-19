@@ -1,0 +1,178 @@
+{
+  "info": {
+    "name": "TRIVON Authentication API",
+    "description": "Requests for implemented health and authentication endpoints. Set the account variables before login. The sellerId variable is required for SELLER_USER accounts.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "userType", "value": "ADMIN" },
+    { "key": "sellerId", "value": "" },
+    { "key": "email", "value": "" },
+    { "key": "password", "value": "" },
+    { "key": "loginBody", "value": "{}" },
+    { "key": "accessToken", "value": "" },
+    { "key": "refreshToken", "value": "" },
+    { "key": "sellerName", "value": "" },
+    { "key": "sellerEmail", "value": "" },
+    { "key": "sellerPassword", "value": "" },
+    { "key": "businessName", "value": "" },
+    { "key": "mobileNumber", "value": "" },
+    { "key": "gstId", "value": "" },
+    { "key": "sellerBody", "value": "{}" },
+    { "key": "firstName", "value": "" },
+    { "key": "lastName", "value": "" },
+    { "key": "sellerUserEmail", "value": "" },
+    { "key": "sellerUserPassword", "value": "" },
+    { "key": "sellerUserId", "value": "" },
+    { "key": "sellerUserBody", "value": "{}" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" }
+    },
+    {
+      "name": "Register seller",
+      "event": [{
+        "listen": "prerequest",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const input = { name: pm.collectionVariables.get('sellerName'), email: pm.collectionVariables.get('sellerEmail'), password: pm.collectionVariables.get('sellerPassword'), businessName: pm.collectionVariables.get('businessName') };",
+            "const mobileNumber = pm.collectionVariables.get('mobileNumber');",
+            "const gstId = pm.collectionVariables.get('gstId');",
+            "if (mobileNumber) input.mobileNumber = mobileNumber;",
+            "if (gstId) input.gstId = gstId;",
+            "pm.collectionVariables.set('sellerBody', JSON.stringify(input, null, 2));"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{{sellerBody}}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/auth/sellers/register"
+      }
+    },
+    {
+      "name": "Login",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const accountType = pm.collectionVariables.get('userType');",
+              "const login = { userType: accountType, email: pm.collectionVariables.get('email'), password: pm.collectionVariables.get('password') };",
+              "if (accountType === 'SELLER_USER') login.sellerId = pm.collectionVariables.get('sellerId');",
+              "pm.collectionVariables.set('loginBody', JSON.stringify(login, null, 2));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+            "pm.test('login succeeds', () => pm.response.to.have.status(200));",
+            "if (pm.response.code === 200) {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('accessToken', body.accessToken);",
+            "  pm.collectionVariables.set('refreshToken', body.refreshToken);",
+            "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{{loginBody}}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{baseUrl}}/auth/login"
+      }
+    },
+    {
+      "name": "Current account",
+      "request": {
+        "method": "GET",
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }] },
+        "url": "{{baseUrl}}/auth/me"
+      }
+    },
+    {
+      "name": "Create seller user",
+      "event": [{
+        "listen": "prerequest",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const input = { firstName: pm.collectionVariables.get('firstName'), lastName: pm.collectionVariables.get('lastName'), email: pm.collectionVariables.get('sellerUserEmail'), password: pm.collectionVariables.get('sellerUserPassword') };",
+            "pm.collectionVariables.set('sellerUserBody', JSON.stringify(input, null, 2));"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }] },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{{sellerUserBody}}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/auth/seller-users"
+      }
+    },
+    {
+      "name": "List seller users",
+      "request": {
+        "method": "GET",
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }] },
+        "url": "{{baseUrl}}/auth/seller-users"
+      }
+    },
+    {
+      "name": "Set seller user active",
+      "request": {
+        "method": "PATCH",
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }] },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"isActive\": false\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/auth/seller-users/{{sellerUserId}}/active"
+      }
+    },
+    {
+      "name": "Refresh",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('refresh succeeds', () => pm.response.to.have.status(200));",
+            "if (pm.response.code === 200) {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('accessToken', body.accessToken);",
+            "  pm.collectionVariables.set('refreshToken', body.refreshToken);",
+            "}"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/auth/refresh"
+      }
+    },
+    {
+      "name": "Logout",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/auth/logout"
+      }
+    }
+  ]
+}
